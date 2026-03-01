@@ -154,7 +154,7 @@ std::string diff_pe(const PeInfo& old_pe, const PeInfo& new_pe) {
             }
             if (osec->characteristics != nsec->characteristics) {
                 mod << "      Flags: " << section_flags(osec->characteristics)
-                    << "-> " << section_flags(nsec->characteristics) << "\n";
+                    << " -> " << section_flags(nsec->characteristics) << "\n";
                 modified = true;
             }
             if (modified) {

@@ -110,7 +110,7 @@ PeInfo parse_pe_from_buffer(const std::vector<uint8_t>& buffer,
     if (!r.read(coff_offset + 0, info.machine))       { info.error = "Truncated COFF header"; return info; }
     if (!r.read(coff_offset + 2, info.num_sections))   { info.error = "Truncated COFF header"; return info; }
     if (!r.read(coff_offset + 4, info.timestamp))      { info.error = "Truncated COFF header"; return info; }
-    if (!r.read(coff_offset + 16, info.characteristics)){ info.error = "Truncated COFF header"; return info; }
+    if (!r.read(coff_offset + 18, info.characteristics)){ info.error = "Truncated COFF header"; return info; }
 
     // 5. Optional header
     size_t opt_offset = coff_offset + 20;
@@ -163,20 +163,7 @@ PeInfo parse_pe_from_buffer(const std::vector<uint8_t>& buffer,
 
     // 6. Section headers
     uint16_t opt_header_size = 0;
-    r.read(coff_offset + 16, opt_header_size); // SizeOfOptionalHeader is at COFF+16
-    // Actually SizeOfOptionalHeader is at offset 16 from start of COFF header
-    // But characteristics is also at offset 16... let me re-check.
-    // COFF header layout:
-    //   +0  Machine (2)
-    //   +2  NumberOfSections (2)
-    //   +4  TimeDateStamp (4)
-    //   +8  PointerToSymbolTable (4)
-    //   +12 NumberOfSymbols (4)
-    //   +16 SizeOfOptionalHeader (2)
-    //   +18 Characteristics (2)
-    r.read(coff_offset + 16, opt_header_size);
-    // Fix: characteristics is at +18, not +16
-    r.read(coff_offset + 18, info.characteristics);
+    r.read(coff_offset + 16, opt_header_size); // SizeOfOptionalHeader
 
     size_t section_offset = opt_offset + opt_header_size;
 
@@ -231,7 +218,7 @@ PeInfo parse_pe_from_buffer(const std::vector<uint8_t>& buffer,
                             } else {
                                 func.by_ordinal = false;
                                 uint32_t hint_off = rva_to_offset(
-                                    static_cast<uint32_t>(thunk & 0x7FFFFFFF),
+                                    static_cast<uint32_t>(thunk & 0x7FFFFFFFFFFFFFFFULL),
                                     info.sections);
                                 if (hint_off != 0) {
                                     r.read(hint_off, func.ordinal);
