@@ -90,3 +90,5 @@ New: app_v2.exe
 ```bash
 cd build && ctest --output-on-failure
 ```
+
+License: MIT (see LICENSE)
