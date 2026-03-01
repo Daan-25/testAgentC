@@ -1,10 +1,13 @@
 #include "pe_diff.h"
+#include "sha256.h"
+#include "str_extract.h"
 
 #include <algorithm>
 #include <iomanip>
 #include <map>
 #include <set>
 #include <sstream>
+#include <vector>
 
 namespace bindiff {
 
@@ -51,7 +54,10 @@ std::string section_flags(uint32_t ch) {
 
 } // anonymous namespace
 
-std::string diff_pe(const PeInfo& old_pe, const PeInfo& new_pe) {
+std::string diff_pe(const PeInfo& old_pe, const PeInfo& new_pe,
+                    const std::vector<uint8_t>& old_data,
+                    const std::vector<uint8_t>& new_data,
+                    const DiffOptions& opts) {
     std::ostringstream out;
 
     out << "Binary Diff Report\n";
@@ -69,13 +75,28 @@ std::string diff_pe(const PeInfo& old_pe, const PeInfo& new_pe) {
     bool any_diff = false;
 
     // --- File size ---
-    if (old_pe.file_size != new_pe.file_size) {
+    {
         header(out, "File Size");
-        int64_t delta = static_cast<int64_t>(new_pe.file_size) -
-                        static_cast<int64_t>(old_pe.file_size);
-        out << "  " << dec(old_pe.file_size) << " -> " << dec(new_pe.file_size)
-            << " bytes (" << (delta > 0 ? "+" : "") << delta << ")\n";
-        any_diff = true;
+        if (old_pe.file_size != new_pe.file_size) {
+            int64_t delta = static_cast<int64_t>(new_pe.file_size) -
+                            static_cast<int64_t>(old_pe.file_size);
+            out << "  " << dec(old_pe.file_size) << " -> " << dec(new_pe.file_size)
+                << " bytes (" << (delta > 0 ? "+" : "") << delta << ")\n";
+            any_diff = true;
+        } else {
+            out << "  " << dec(old_pe.file_size) << " bytes (identical)\n";
+        }
+    }
+
+    // --- SHA-256 hashes ---
+    if (opts.show_hashes && !old_data.empty() && !new_data.empty()) {
+        header(out, "SHA-256");
+        std::string old_hash = sha256_hex(old_data);
+        std::string new_hash = sha256_hex(new_data);
+        out << "  Old: " << old_hash << "\n";
+        out << "  New: " << new_hash << "\n";
+        out << "  Match: " << (old_hash == new_hash ? "yes" : "no") << "\n";
+        if (old_hash != new_hash) any_diff = true;
     }
 
     // --- Architecture ---
@@ -156,6 +177,14 @@ std::string diff_pe(const PeInfo& old_pe, const PeInfo& new_pe) {
                 mod << "      Flags: " << section_flags(osec->characteristics)
                     << " -> " << section_flags(nsec->characteristics) << "\n";
                 modified = true;
+            }
+            // Detect content change via per-section hash
+            if (opts.show_hashes &&
+                !osec->content_hash.empty() && !nsec->content_hash.empty()) {
+                if (osec->content_hash != nsec->content_hash) {
+                    mod << "      Content: changed (hash differs)\n";
+                    modified = true;
+                }
             }
             if (modified) {
                 sec_out << "  ~ Changed: " << name << "\n" << mod.str();
@@ -256,6 +285,49 @@ std::string diff_pe(const PeInfo& old_pe, const PeInfo& new_pe) {
                 out << "  - Removed: " << e << "\n";
             for (const auto& e : added)
                 out << "  + Added:   " << e << "\n";
+            any_diff = true;
+        }
+    }
+
+    // --- Strings diff ---
+    if (opts.show_strings && !old_data.empty() && !new_data.empty()) {
+        auto old_strings = extract_all_strings(old_data.data(), old_data.size(),
+                                                opts.min_string_len);
+        auto new_strings = extract_all_strings(new_data.data(), new_data.size(),
+                                                opts.min_string_len);
+
+        std::vector<std::string> added, removed;
+        for (const auto& s : new_strings) {
+            if (old_strings.find(s) == old_strings.end())
+                added.push_back(s);
+        }
+        for (const auto& s : old_strings) {
+            if (new_strings.find(s) == new_strings.end())
+                removed.push_back(s);
+        }
+
+        // Sort for deterministic output
+        std::sort(added.begin(), added.end());
+        std::sort(removed.begin(), removed.end());
+
+        if (!added.empty() || !removed.empty()) {
+            header(out, "Strings Changes");
+            out << "  Added:   " << added.size() << " strings\n";
+            out << "  Removed: " << removed.size() << " strings\n";
+
+            size_t show_added = std::min(added.size(), opts.max_examples);
+            size_t show_removed = std::min(removed.size(), opts.max_examples);
+
+            if (show_removed > 0) {
+                out << "  Top removed:\n";
+                for (size_t i = 0; i < show_removed; ++i)
+                    out << "    - " << removed[i] << "\n";
+            }
+            if (show_added > 0) {
+                out << "  Top added:\n";
+                for (size_t i = 0; i < show_added; ++i)
+                    out << "    + " << added[i] << "\n";
+            }
             any_diff = true;
         }
     }

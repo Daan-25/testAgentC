@@ -28,6 +28,7 @@ struct SectionInfo {
     uint32_t raw_data_size;
     uint32_t raw_data_offset;
     uint32_t characteristics;
+    std::string content_hash; // SHA-256 of raw section bytes (empty if hashing disabled)
 };
 
 struct ImportFunction {
