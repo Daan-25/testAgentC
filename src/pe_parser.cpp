@@ -1,4 +1,5 @@
 #include "pe_parser.h"
+#include "sha256.h"
 
 #include <algorithm>
 #include <cstring>
@@ -35,9 +36,12 @@ struct BufReader {
 
 uint32_t rva_to_offset(uint32_t rva, const std::vector<SectionInfo>& sections) {
     for (const auto& sec : sections) {
+        // Use max(VirtualSize, SizeOfRawData) for more robust RVA mapping
+        uint32_t section_span = std::max(sec.virtual_size, sec.raw_data_size);
         if (rva >= sec.virtual_address &&
-            rva < sec.virtual_address + sec.raw_data_size) {
-            return sec.raw_data_offset + (rva - sec.virtual_address);
+            rva < sec.virtual_address + section_span) {
+            uint32_t offset = sec.raw_data_offset + (rva - sec.virtual_address);
+            return offset;
         }
     }
     return 0;
@@ -76,7 +80,8 @@ std::string PeInfo::timestamp_str() const {
 // ---- Core parser ----
 
 PeInfo parse_pe_from_buffer(const std::vector<uint8_t>& buffer,
-                            const std::string& label) {
+                            const std::string& label,
+                            const ParseOptions& opts) {
     PeInfo info{};
     info.file_path = label;
     info.file_size = buffer.size();
@@ -183,6 +188,15 @@ PeInfo parse_pe_from_buffer(const std::vector<uint8_t>& buffer,
         r.read(so + 20, sec.raw_data_offset);
         r.read(so + 36, sec.characteristics);
 
+        // Compute section content hash if requested and data is within bounds
+        if (opts.compute_section_hashes &&
+            sec.raw_data_size > 0 &&
+            sec.raw_data_offset < buffer.size() &&
+            static_cast<size_t>(sec.raw_data_offset) + sec.raw_data_size <= buffer.size()) {
+            sec.content_hash = sha256_hex(
+                buffer.data() + sec.raw_data_offset, sec.raw_data_size);
+        }
+
         info.sections.push_back(sec);
     }
 
@@ -193,9 +207,10 @@ PeInfo parse_pe_from_buffer(const std::vector<uint8_t>& buffer,
             // Each import descriptor is 20 bytes; last one is all zeros
             for (size_t idx = 0; ; ++idx) {
                 size_t desc = imp_offset + idx * 20;
-                uint32_t ilt_rva = 0, name_rva = 0;
+                uint32_t ilt_rva = 0, name_rva = 0, ft_rva = 0;
                 if (!r.read(desc + 0, ilt_rva)) break;   // OriginalFirstThunk
                 if (!r.read(desc + 12, name_rva)) break;  // Name RVA
+                if (!r.read(desc + 16, ft_rva)) break;    // FirstThunk
                 if (ilt_rva == 0 && name_rva == 0) break;  // terminator
 
                 ImportEntry entry{};
@@ -204,8 +219,11 @@ PeInfo parse_pe_from_buffer(const std::vector<uint8_t>& buffer,
                     r.read_str(name_off, 256, entry.dll_name);
                 }
 
-                // Walk the ILT (Import Lookup Table)
-                uint32_t ilt_off = rva_to_offset(ilt_rva, info.sections);
+                // Fall back to FirstThunk if OriginalFirstThunk is 0
+                uint32_t lookup_rva = (ilt_rva != 0) ? ilt_rva : ft_rva;
+
+                // Walk the Import Lookup Table
+                uint32_t ilt_off = rva_to_offset(lookup_rva, info.sections);
                 if (ilt_off != 0) {
                     for (size_t fi = 0; ; ++fi) {
                         if (info.is_pe32_plus) {
@@ -297,7 +315,8 @@ PeInfo parse_pe_from_buffer(const std::vector<uint8_t>& buffer,
     return info;
 }
 
-PeInfo parse_pe(const std::string& file_path) {
+PeInfo parse_pe(const std::string& file_path,
+                const ParseOptions& opts) {
     PeInfo info{};
     info.file_path = file_path;
     info.valid = false;
@@ -317,7 +336,7 @@ PeInfo parse_pe(const std::string& file_path) {
         return info;
     }
 
-    return parse_pe_from_buffer(buffer, file_path);
+    return parse_pe_from_buffer(buffer, file_path, opts);
 }
 
 } // namespace bindiff

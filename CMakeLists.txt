@@ -9,6 +9,8 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 add_library(bindiff_lib STATIC
     src/pe_parser.cpp
     src/pe_diff.cpp
+    src/sha256.cpp
+    src/str_extract.cpp
 )
 target_include_directories(bindiff_lib PUBLIC src)
 
@@ -31,6 +33,7 @@ FetchContent_MakeAvailable(googletest)
 add_executable(bindiff_tests
     tests/test_pe_parser.cpp
     tests/test_pe_diff.cpp
+    tests/test_sha256_strings.cpp
 )
 target_link_libraries(bindiff_tests PRIVATE bindiff_lib GTest::gtest_main)
 
